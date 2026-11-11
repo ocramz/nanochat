@@ -61,14 +61,19 @@ COMPILE = False
 
 
 def cpu_threads():
-    """The CPUs the container's cgroup allows, or the machine's."""
-    try:
-        with open("/sys/fs/cgroup/cpu.max") as f:
-            quota, period = f.read().split()
-        if quota != "max":
-            return max(1, int(int(quota) / int(period)))
-    except (OSError, ValueError):
-        pass
+    """The CPUs the container's cgroup allows (cgroup2, or v1 as on Cloud Run), or the machine's."""
+    for quota_file, period_file in (("/sys/fs/cgroup/cpu.max", None), ("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", "/sys/fs/cgroup/cpu/cpu.cfs_period_us")):
+        try:
+            with open(quota_file) as f:
+                words = f.read().split()
+            if period_file is not None:
+                with open(period_file) as f:
+                    words.append(f.read().strip())
+            quota, period = words[0], words[-1]
+            if quota not in ("max", "-1"):
+                return max(1, int(int(quota) / int(period)))
+        except (OSError, ValueError, IndexError):
+            pass
     return os.cpu_count() or 1
 
 

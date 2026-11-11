@@ -4,7 +4,8 @@
 # scripts/speedrun.py, which trains and writes the model as ONNX; eval/check refuses a round over the
 # budget, a model that breaks the contract (SPEEDRUN.md) or looks ahead; eval/score gives the model's
 # bits per byte on held-out text, in $SECRET, which no run sees. The harness never runs the
-# candidate's code: models run in onnxruntime, as data.
+# candidate's code: models run in onnxruntime, as data. ORT_DISABLE_TELEMETRY=1: onnxruntime would
+# otherwise open network sockets for its telemetry, which the sandbox denies.
 
 [agents]
 max_tokens = 3000000
@@ -30,9 +31,9 @@ outputs = ["nanochat/**", "scripts/**"]
 
 [steps]
 build = { cmd = "python -m compileall -q nanochat scripts", timeout_secs = 120 }
-run   = { cmd = "env PYTHONPATH=$BUILD NANOCHAT_BASE_DIR=/opt/nanochat TORCHINDUCTOR_COMPILE_THREADS=1 python -m scripts.speedrun --wall-secs 120 --out $OUTPUTS", timeout_secs = 180 }
-check = { cmd = "python -I eval/check.py $ROUNDS $BASELINE_OUT $CANDIDATE_OUT $SECRET --wall-secs 120 --rounds 3", timeout_secs = 600 }
-score = { cmd = "python -I eval/score.py $OUTPUTS $SECRET", timeout_secs = 120 }
+run   = { cmd = "env PYTHONPATH=$BUILD NANOCHAT_BASE_DIR=/opt/nanochat TORCHINDUCTOR_COMPILE_THREADS=1 ORT_DISABLE_TELEMETRY=1 python -m scripts.speedrun --wall-secs 120 --out $OUTPUTS", timeout_secs = 180 }
+check = { cmd = "env ORT_DISABLE_TELEMETRY=1 python -I eval/check.py $ROUNDS $BASELINE_OUT $CANDIDATE_OUT $SECRET --wall-secs 120 --rounds 3", timeout_secs = 600 }
+score = { cmd = "env ORT_DISABLE_TELEMETRY=1 python -I eval/score.py $OUTPUTS $SECRET", timeout_secs = 120 }
 
 [paired]
 # The metric is no time: nothing to warm up. Each round trains from a seed of its own.

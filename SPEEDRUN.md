@@ -60,3 +60,6 @@ the dataset's reader (`nanochat/dataset.py`), the rules, and the harness (`bench
 - The root runs eagerly: `torch.compile` compiles within the budget, at each round's start.
 - A round's seed comes from `os.urandom`, so rounds differ; the harness compares each candidate round
   with a root round run on the same machine.
+- No network: a round that opens a network socket, even one that fails, is a policy violation, and
+  fails the experiment. onnxruntime's telemetry would: `ORT_DISABLE_TELEMETRY=1` is set for every
+  round, and `nanochat/export.py` sets it again before onnxruntime loads.

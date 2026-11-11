@@ -16,8 +16,12 @@ import math
 import os
 
 import numpy as np
-import onnxruntime as ort
-import tiktoken
+
+# onnxruntime sends telemetry to Microsoft from a thread of its own on Linux, which the sandbox denies
+# (no network sockets): off before it loads. The commands set it too.
+os.environ["ORT_DISABLE_TELEMETRY"] = "1"
+import onnxruntime as ort  # noqa: E402
+import tiktoken  # noqa: E402
 
 TREE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOKENIZER = os.path.join(TREE, "bench", "tokenizer")
@@ -92,14 +96,19 @@ def chunks(tokens, t_eval):
 
 
 def threads():
-    """The CPUs the container's cgroup allows, or the machine's."""
-    try:
-        with open("/sys/fs/cgroup/cpu.max") as f:
-            quota, period = f.read().split()
-        if quota != "max":
-            return max(1, int(int(quota) / int(period)))
-    except (OSError, ValueError):
-        pass
+    """The CPUs the container's cgroup allows (cgroup2, or v1 as on Cloud Run), or the machine's."""
+    for quota_file, period_file in (("/sys/fs/cgroup/cpu.max", None), ("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", "/sys/fs/cgroup/cpu/cpu.cfs_period_us")):
+        try:
+            with open(quota_file) as f:
+                words = f.read().split()
+            if period_file is not None:
+                with open(period_file) as f:
+                    words.append(f.read().strip())
+            quota, period = words[0], words[-1]
+            if quota not in ("max", "-1"):
+                return max(1, int(int(quota) / int(period)))
+        except (OSError, ValueError, IndexError):
+            pass
     return os.cpu_count() or 1
 
 

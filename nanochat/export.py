@@ -8,12 +8,17 @@ Editable: change how the model exports, as long as what it writes keeps the cont
 """
 
 import logging
+import os
 
 import numpy as np
-import onnxruntime as ort
-import torch
 
-from nanochat.onnx_rules import T_EVAL, VOCAB, problems
+# onnxruntime sends telemetry to Microsoft from a thread of its own on Linux: a network socket, which
+# the sandbox denies, failing the round. Off before it loads (the harness's command sets it too).
+os.environ["ORT_DISABLE_TELEMETRY"] = "1"
+import onnxruntime as ort  # noqa: E402
+import torch  # noqa: E402
+
+from nanochat.onnx_rules import T_EVAL, VOCAB, problems  # noqa: E402
 
 for _name in ("onnxscript", "onnx_ir", "torch.onnx"):
     logging.getLogger(_name).setLevel(logging.WARNING)
