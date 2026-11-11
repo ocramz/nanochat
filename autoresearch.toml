@@ -10,6 +10,17 @@
 [agents]
 max_tokens = 3000000
 
+# A search biased toward its promising branches (plan 16a, with the user): half UCB's exploration
+# bonus, two children an expansion, and branches pruned once 2% behind the incumbent, beyond their
+# noise; 80 experiments at most, about 33 minutes each.
+[search]
+children_per_expansion = 2
+ucb_c_sigma = 1.0
+prune_margin = 0.02
+
+[limits]
+max_experiments = 80
+
 [metric]
 name = "val_bpb"
 direction = "minimize"
@@ -31,8 +42,8 @@ outputs = ["nanochat/**", "scripts/**"]
 
 [steps]
 build = { cmd = "python -m compileall -q nanochat scripts", timeout_secs = 120 }
-run   = { cmd = "env PYTHONPATH=$BUILD NANOCHAT_BASE_DIR=/opt/nanochat TORCHINDUCTOR_COMPILE_THREADS=1 ORT_DISABLE_TELEMETRY=1 python -m scripts.speedrun --wall-secs 120 --out $OUTPUTS", timeout_secs = 180 }
-check = { cmd = "env ORT_DISABLE_TELEMETRY=1 python -I eval/check.py $ROUNDS $BASELINE_OUT $CANDIDATE_OUT $SECRET --wall-secs 120 --rounds 3", timeout_secs = 600 }
+run   = { cmd = "env PYTHONPATH=$BUILD NANOCHAT_BASE_DIR=/opt/nanochat TORCHINDUCTOR_COMPILE_THREADS=1 ORT_DISABLE_TELEMETRY=1 python -m scripts.speedrun --wall-secs 300 --out $OUTPUTS", timeout_secs = 360 }
+check = { cmd = "env ORT_DISABLE_TELEMETRY=1 python -I eval/check.py $ROUNDS $BASELINE_OUT $CANDIDATE_OUT $SECRET --wall-secs 300 --rounds 3", timeout_secs = 600 }
 score = { cmd = "env ORT_DISABLE_TELEMETRY=1 python -I eval/score.py $OUTPUTS $SECRET", timeout_secs = 120 }
 
 [paired]
@@ -43,5 +54,5 @@ rounds = 3
 [resources]
 cpu = 8
 memory_gib = 8
-# 6 rounds of at most 180 s, the check's 600 and 6 scores of 120, and the build and startup.
-task_timeout_secs = 2700
+# 6 rounds of at most 360 s, the check's 600 and 6 scores of 120, and the build and startup.
+task_timeout_secs = 3600
