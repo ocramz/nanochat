@@ -5,9 +5,11 @@ The speedrun's training script (SPEEDRUN.md): trains nanochat's GPT from scratch
 
 Trimmed from scripts/base_train.py: one process on the CPU, no evaluation, no checkpoints, no
 logging service; the schedules follow the time spent rather than a number of steps, as
-karpathy/autoresearch's do. Run from the repository's root:
+karpathy/autoresearch's do. With --checkpoints, it writes a snapshot of the model at each tenth of
+its training time, which the harness scores for the learning curves (SPEEDRUN.md). Run from the
+repository's root:
 
-    NANOCHAT_BASE_DIR=/opt/nanochat python -m scripts.speedrun --wall-secs 120 --out OUT
+    NANOCHAT_BASE_DIR=/opt/nanochat python -m scripts.speedrun --wall-secs 120 --out OUT [--checkpoints DIR]
 
 Editable: everything here is the agents' to change, within SPEEDRUN.md's rules.
 """
@@ -26,7 +28,7 @@ import torch  # noqa: E402
 import torch._dynamo  # noqa: E402
 
 from nanochat.dataloader import tokenizing_distributed_data_loader_with_state_bos_bestfit  # noqa: E402
-from nanochat.export import export, to_onnx, verify  # noqa: E402
+from nanochat.export import export, snapshot, template, to_onnx, verify  # noqa: E402
 from nanochat.gpt import GPT, GPTConfig  # noqa: E402
 from nanochat.onnx_rules import T_EVAL  # noqa: E402
 from nanochat.tokenizer import get_tokenizer  # noqa: E402
@@ -58,6 +60,9 @@ RESERVE_SECS = 15.0
 # torch.compile: off, since compiling takes longer than it saves in a run this short. The model and
 # the optimizer's fused steps then run eagerly.
 COMPILE = False
+# Snapshots for the learning curves, with --checkpoints: one at each 1/SNAPSHOTS of the training time
+# but its end, which the exported model stands for.
+SNAPSHOTS = 10
 
 
 def cpu_threads():
@@ -99,6 +104,7 @@ def main():
     parser = argparse.ArgumentParser(description="the speedrun's training run")
     parser.add_argument("--wall-secs", type=float, required=True, help="the budget, start to exit")
     parser.add_argument("--out", required=True, help="the directory model.onnx goes in")
+    parser.add_argument("--checkpoints", help="the directory snapshots go in, as <ms since the start>.onnx")
     args = parser.parse_args()
     deadline = START + args.wall_secs - RESERVE_SECS
 
@@ -121,8 +127,12 @@ def main():
     model.init_weights()
     say(f"{config}, {sum(p.numel() for p in model.parameters()):,} parameters")
 
-    # Fail fast: a model that won't export crashes the round now, not after its budget.
-    verify(model, to_onnx(model))
+    # Fail fast: a model that won't export crashes the round now, not after its budget. The export is
+    # also the template every snapshot fills in.
+    untrained = to_onnx(model)
+    verify(model, untrained)
+    shape = template(untrained) if args.checkpoints else None
+    del untrained
     say("the untrained model exports")
 
     optimizer = model.setup_optimizer(
@@ -144,10 +154,19 @@ def main():
     say(f"training for {train_secs:.1f} s")
     step = 0
     smooth_loss = 0.0
+    snapped = 0
     while True:
         progress = (time.time() - train_start) / train_secs
         if progress >= 1.0:
             break
+        if shape is not None and snapped + 1 < SNAPSHOTS and progress >= (snapped + 1) / SNAPSHOTS:
+            snapped += 1
+            t0 = time.time()
+            ms = int((t0 - START) * 1000)
+            data = snapshot(shape, model)
+            with open(os.path.join(args.checkpoints, f"{ms}.onnx"), "wb") as f:
+                f.write(data)
+            say(f"snapshot {snapped} at {ms} ms, {len(data):,} bytes, in {time.time() - t0:.2f} s")
         lrm = lr_multiplier(progress)
         for group in optimizer.param_groups:
             group["lr"] = group["initial_lr"] * lrm

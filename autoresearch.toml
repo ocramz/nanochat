@@ -6,6 +6,11 @@
 # bits per byte on held-out text, in $SECRET, which no run sees. The harness never runs the
 # candidate's code: models run in onnxruntime, as data. ORT_DISABLE_TELEMETRY=1: onnxruntime would
 # otherwise open network sockets for its telemetry, which the sandbox denies.
+#
+# Learning curves (plan 16e): each round writes a snapshot of its model at each tenth of its training
+# time to $CHECKPOINTS; eval/diagnose scores the first measured round's on the diagnostic text, in
+# $DIAGNOSTIC, which nothing selects on, for agents to see; eval/score logs their val curve for the
+# owner alone.
 
 [agents]
 max_tokens = 3000000
@@ -31,6 +36,7 @@ source = "score"
 allow  = ["scripts/speedrun.py", "nanochat/gpt.py", "nanochat/optim.py", "nanochat/dataloader.py", "nanochat/common.py", "nanochat/flash_attention.py", "nanochat/export.py"]
 locked = ["nanochat/onnx_rules.py", "nanochat/tokenizer.py", "nanochat/dataset.py", "SPEEDRUN.md", "pyproject.toml", "uv.lock", "requirements*", ".python-version", "bench/**", "eval/**"]
 secret = ["eval/secret/**"]
+diagnostic = ["eval/diagnostic/**"]
 
 [image]
 # python:3.13-bookworm, by its multi-arch digest: the python template's base.
@@ -42,9 +48,14 @@ outputs = ["nanochat/**", "scripts/**"]
 
 [steps]
 build = { cmd = "python -m compileall -q nanochat scripts", timeout_secs = 120 }
-run   = { cmd = "env PYTHONPATH=$BUILD NANOCHAT_BASE_DIR=/opt/nanochat TORCHINDUCTOR_COMPILE_THREADS=1 ORT_DISABLE_TELEMETRY=1 python -m scripts.speedrun --wall-secs 300 --out $OUTPUTS", timeout_secs = 360 }
+run   = { cmd = "env PYTHONPATH=$BUILD NANOCHAT_BASE_DIR=/opt/nanochat TORCHINDUCTOR_COMPILE_THREADS=1 ORT_DISABLE_TELEMETRY=1 python -m scripts.speedrun --wall-secs 300 --out $OUTPUTS --checkpoints $CHECKPOINTS", timeout_secs = 360 }
 check = { cmd = "env ORT_DISABLE_TELEMETRY=1 python -I eval/check.py $ROUNDS $BASELINE_OUT $CANDIDATE_OUT $SECRET --wall-secs 300 --rounds 3", timeout_secs = 600 }
-score = { cmd = "env ORT_DISABLE_TELEMETRY=1 python -I eval/score.py $OUTPUTS $SECRET", timeout_secs = 120 }
+score = { cmd = "env ORT_DISABLE_TELEMETRY=1 python -I eval/score.py $OUTPUTS $SECRET --checkpoints $CHECKPOINTS --wall-ms $WALL_MS", timeout_secs = 120 }
+diagnose = { cmd = "env ORT_DISABLE_TELEMETRY=1 python -I eval/diagnose.py $CHECKPOINTS $OUTPUTS $WALL_MS $DIAGNOSTIC", timeout_secs = 180 }
+
+[diagnose]
+curves = ["bpb"]
+values = ["bpb_pos_0_63", "bpb_pos_64_255", "bpb_pos_256_511"]
 
 [paired]
 # The metric is no time: nothing to warm up. Each round trains from a seed of its own.
@@ -54,5 +65,6 @@ rounds = 3
 [resources]
 cpu = 8
 memory_gib = 8
-# 6 rounds of at most 360 s, the check's 600 and 6 scores of 120, and the build and startup.
-task_timeout_secs = 3600
+# 6 rounds of at most 360 s, the check's 600, 6 scores of 120 and 2 diagnoses of 180, and the build
+# and startup.
+task_timeout_secs = 3960

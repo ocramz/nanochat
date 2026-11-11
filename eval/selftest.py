@@ -7,9 +7,14 @@ The root's model passes, its prefixes exactly equal under every splice, and onnx
 byte are PyTorch's; each cheat is refused: a model that isn't causal, one that peeks one token ahead
 at 1% of positions (by position or by content), a foreign op, external data reaching for the secret
 split, a random op, a model over the size cap, one whose evaluation is over the time cap, the wrong
-shape, a second output; and a model that won't export fails fast.
+shape, a second output; and a model that won't export fails fast. Snapshots (plan 16e): one is the
+export of the same weights, byte for byte; only those that count are scored; diagnose prints its
+schema; and score prints the same with snapshots as without.
 """
 
+import contextlib
+import io
+import json
 import math
 import os
 import sys
@@ -26,9 +31,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 import check  # noqa: E402
+import diagnose  # noqa: E402
 import evallib  # noqa: E402
+import score  # noqa: E402
 from nanochat import flash_attention  # noqa: E402
-from nanochat.export import ExportFailed, to_onnx  # noqa: E402
+from nanochat.export import ExportFailed, snapshot, template, to_onnx  # noqa: E402
 from nanochat.gpt import GPT, GPTConfig  # noqa: E402
 
 rules = evallib.rules
@@ -130,6 +137,84 @@ def torch_bpb(m, rows, nbytes):
     return nats / (math.log(2) * total)
 
 
+def quiet(fn, *args):
+    """What `fn(*args)` prints on stdout, and its return value; its stderr dropped."""
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+        code = fn(*args)
+    return out.getvalue(), code
+
+
+def snapshot_cases(root, data):
+    """Snapshots, as the round writes them and the harness takes them (plan 16e)."""
+    shape = template(data)
+    trained = model()  # other weights, the same graph
+    trained.load_state_dict(root.state_dict())
+    with torch.no_grad():
+        for p in trained.parameters():
+            p.add_(0.01 * torch.randn_like(p))
+    final = to_onnx(trained)
+
+    def same_bytes():
+        if snapshot(shape, trained) != final:
+            raise check.Failed("a snapshot differs from the export of the same weights")
+        return f"{len(final):,} bytes"
+
+    expect("a snapshot is the export of the same weights, byte for byte", False, same_bytes)
+
+    with tempfile.TemporaryDirectory() as d:
+        checkpoints, outputs = os.path.join(d, "checkpoints"), os.path.join(d, "outputs")
+        os.makedirs(checkpoints)
+        os.makedirs(outputs)
+        with open(os.path.join(outputs, "model.onnx"), "wb") as f:
+            f.write(final)
+        wall_ms = 300_000
+        files = {f"{1000 * (k + 1)}.onnx": snapshot(shape, root) for k in range(18)}
+        files["0300000.onnx"] = data  # not a name: a leading zero
+        files["300000.onnx"] = data  # not before the round's end
+        files["snapshot.onnx"] = data
+        files["500.onnx"] = export(model(depth=1))  # another graph
+        for name, body in files.items():
+            with open(os.path.join(checkpoints, name), "wb") as f:
+                f.write(body)
+
+        def counted():
+            said = []
+            kept = [ms for ms, _ in evallib.snapshots(checkpoints, wall_ms, final, said.append)]
+            # The first 16 by time are 500.onnx, of another graph, and 1000 to 15000.
+            if kept != [1000 * (k + 1) for k in range(15)]:
+                raise check.Failed(f"kept {kept}; skipped {said}")
+            return f"{len(kept)} kept, {len(said)} skipped"
+
+        expect("only the snapshots that count: <ms>.onnx, before the end, the final graph, 16 at most", False, counted)
+
+        def schema():
+            out, code = quiet(diagnose.main, [checkpoints, outputs, str(wall_ms), os.path.dirname(HERE)])
+            printed = json.loads(out)
+            curve = printed["curves"]["bpb"]
+            xs = [x for x, _ in curve]
+            names = sorted(printed["values"])
+            if code != 0 or sorted(printed) != ["curves", "values"] or list(printed["curves"]) != ["bpb"]:
+                raise check.Failed(f"exit {code}: {out[:200]}")
+            if names != ["bpb_pos_0_63", "bpb_pos_256_511", "bpb_pos_64_255"] or xs != sorted(set(xs)) or xs[-1] != wall_ms or len(xs) != 16:
+                raise check.Failed(f"{names}, x {xs}")
+            if not all(math.isfinite(y) for _, y in curve) or not all(math.isfinite(v) for v in printed["values"].values()):
+                raise check.Failed("a number that isn't finite")
+            return f"{len(out):,} bytes, the final model at {curve[-1][1]:.4f}"
+
+        expect("diagnose prints its schema: the curve bpb, the final model last, the three values", False, schema)
+
+        def unchanged():
+            secret = os.path.dirname(HERE)
+            alone, code = quiet(score.main, [outputs, secret])
+            curved, code2 = quiet(score.main, [outputs, secret, "--checkpoints", checkpoints, "--wall-ms", str(wall_ms)])
+            if (alone, code) != (curved, code2) or code != 0:
+                raise check.Failed(f"{alone!r} (exit {code}) without snapshots, {curved!r} (exit {code2}) with")
+            return alone.strip()
+
+        expect("score prints the same with snapshots as without", False, unchanged)
+
+
 def main():
     enc, bos = evallib.tokenizer()
     tokens = evallib.stream(enc, bos, evallib.documents(os.path.dirname(HERE), "val"))
@@ -206,6 +291,8 @@ def main():
     if time.time() - t0 > 30:
         print("FAIL the failed export took over 30 s")
         results.append(False)
+
+    snapshot_cases(root, data)
 
     print(f"{sum(results)} of {len(results)} as expected")
     return 0 if all(results) else 1

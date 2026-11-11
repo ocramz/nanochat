@@ -34,10 +34,32 @@ the harness.
 - **Size and speed:** at most 512 MiB, at most 8 times the bytes of the root's model, and an
   evaluation at most 8 times as slow as the root model's.
 
-`nanochat/export.py` exports with `torch.onnx.export(..., dynamo=True)` at opset 18, then checks the
-result against these rules and against the model's own logits in onnxruntime. A model that fails
-crashes the round, and the reason is in the round's log. The root's script also exports the model
-once before training, so that a change that can't be exported fails in seconds.
+`nanochat/export.py` exports with `torch.onnx.export(..., dynamo=True, optimize=False)` at opset 18,
+then checks the result against these rules and against the model's own logits in onnxruntime. A
+model that fails crashes the round, and the reason is in the round's log. The root's script also
+exports the model once before training, so that a change that can't be exported fails in seconds.
+
+## Snapshots and learning curves
+
+A round may write snapshots of its model to the directory `--checkpoints` names, `$CHECKPOINTS`: the
+root's script writes one at each tenth of its training time. They let you see how a run trained, not
+only where it ended.
+
+- **Optional:** a round that writes none is scored as any other.
+- **Where and how:** `$CHECKPOINTS/<ms>.onnx`, `<ms>` the milliseconds since the process started, a
+  whole number with no leading zero, before the round's end.
+- **The final model's graph:** a snapshot counts only if it is `model.onnx` but for its weights'
+  values, no larger, and keeps the contract; at most 16 count, the earliest. The root's
+  `nanochat/export.py` makes one in a fraction of a second, by writing the current weights into the
+  untrained model's export, which runs no graph optimizer for that reason.
+- **What you see:** the harness scores the first measured round's snapshots, and its final model, on
+  diagnostic text: held-out text from another shard than the training data and the metric's, which
+  no round can read and nothing selects on. The query tools show each experiment's curve of bits per
+  byte against time, and the final model's bits per byte by the position of the target in its row
+  (0–63, 64–255, 256–511), baseline against candidate. They are not the metric, and don't count
+  toward a node's value.
+- **Their cost:** writing them takes the round's own time, within its budget, the same for every
+  round of either side.
 
 ## What may change
 

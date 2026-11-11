@@ -2,10 +2,16 @@
 make_val VAL_SHARD TRAIN_SHARD... : writes the held-out splits, eval/secret/val.jsonl.gz and
 eval/secret/test.jsonl.gz, and their manifest, eval/val_manifest.json. Run once, on the workstation.
 
+make_val --diagnostic SHARD EXCLUDED_SHARD... : writes the diagnostic text,
+eval/diagnostic/diagnostic.jsonl.gz, and its entry in the manifest, leaving the splits as they are
+(plan 16e of pi-autoresearch-serverless). Run once, on the workstation.
+
 Each split is documents of ClimbMix's last shard (shard_06542, which the image never fetches), in
 the shard's order, each at least EVAL_TOKENS tokens in all, none of them also in a training shard
-(by the SHA-256 of its text), the test split after the val split. One document per line, as a JSON
-string; gzip with no name and no time, so that the files are the same each time they're made.
+(by the SHA-256 of its text), the test split after the val split. The diagnostic text is documents
+of another shard the image never fetches (shard_00002), at least DIAGNOSTIC_TOKENS tokens, none of
+them also in the excluded shards: the training shards and the val split's. One document per line, as
+a JSON string; gzip with no name and no time, so that the files are the same each time they're made.
 """
 
 import gzip
@@ -90,7 +96,43 @@ def main(val_shard, train_shards):
     print(json.dumps(manifest, indent=2))
 
 
+def diagnostic(shard, excluded):
+    enc, _ = evallib.tokenizer()
+    seen = {digest(t) for other in excluded for t in texts(other)}
+    docs, count, dropped = [], 0, 0
+    for text in texts(shard):
+        if digest(text) in seen:
+            dropped += 1
+            continue
+        docs.append(text)
+        count += 1 + len(enc.encode_ordinary(text))
+        if count >= evallib.DIAGNOSTIC_TOKENS:
+            break
+    if count < evallib.DIAGNOSTIC_TOKENS:
+        raise SystemExit(f"the shard has {count} tokens, fewer than {evallib.DIAGNOSTIC_TOKENS}")
+    os.makedirs(os.path.join(HERE, "diagnostic"), exist_ok=True)
+    path = os.path.join(HERE, "diagnostic", "diagnostic.jsonl.gz")
+    write(path, docs)
+    with open(os.path.join(HERE, "val_manifest.json")) as f:
+        manifest = json.load(f)
+    manifest["diagnostic"] = {
+        "shard": {"file": os.path.basename(shard), "sha256": sha256_file(shard)},
+        "excluded_shards": [{"file": os.path.basename(s), "sha256": sha256_file(s)} for s in excluded],
+        "dropped_as_excluded": dropped,
+        "documents": len(docs),
+        "tokens": count,
+        "sha256": sha256_file(path),
+    }
+    with open(os.path.join(HERE, "val_manifest.json"), "w") as f:
+        json.dump(manifest, f, indent=2)
+        f.write("\n")
+    print(json.dumps(manifest["diagnostic"], indent=2))
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        raise SystemExit("usage: make_val VAL_SHARD TRAIN_SHARD...")
-    main(sys.argv[1], sys.argv[2:])
+    if len(sys.argv) >= 3 and sys.argv[1] == "--diagnostic":
+        diagnostic(sys.argv[2], sys.argv[3:])
+    elif len(sys.argv) >= 3:
+        main(sys.argv[1], sys.argv[2:])
+    else:
+        raise SystemExit("usage: make_val VAL_SHARD TRAIN_SHARD... | make_val --diagnostic SHARD EXCLUDED_SHARD...")
