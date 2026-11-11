@@ -1,0 +1,30 @@
+{
+  "dataset": "karpathy/climbmix-400b-shuffle",
+  "revision": "915333b4f8b8684f39aeaafea600fea6f43fb703",
+  "val_shard": {
+    "file": "shard_06542.parquet",
+    "sha256": "769fe59d108dfd2cfa186c63173b83fbfb90a7adb3519519ba6eaa6ca9889f94"
+  },
+  "train_shards": [
+    {
+      "file": "shard_00000.parquet",
+      "sha256": "054ddbd98abf30d773c54de578fc9d579bafeb6c14e04e97bd36aa90e825bf9b"
+    },
+    {
+      "file": "shard_00001.parquet",
+      "sha256": "d4cfe1de19f4fd976022a9047458655968bc5583582ec5fa714801ec2be2c93c"
+    }
+  ],
+  "dropped_as_in_training": 0,
+  "eval_tokens": 262144,
+  "val": {
+    "documents": 365,
+    "tokens": 282864,
+    "sha256": "6ac33ddc5e3f6a8ebe6620fb4d9cd7a7aa8fe411c09514170d5e2234a8840fce"
+  },
+  "test": {
+    "documents": 372,
+    "tokens": 262206,
+    "sha256": "9147c952ec97c7048c50fc0362a43bb3b82d0653786f0ed0be2c602ad1863bfe"
+  }
+}

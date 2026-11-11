@@ -1,0 +1,30 @@
+#!/bin/sh
+# fetch (autoresearch, plan 16a of pi-autoresearch-serverless): what the runs and the harness need,
+# as the job image is built: the only step with network access, run once, as root in /work (design
+# §9.2 of pi-autoresearch-serverless).
+# - The Python packages, pinned by their hashes, into the system's site-packages: root's, and
+#   readable by every uid. torch for the CPU from PyTorch's index, the rest from PyPI.
+# - ClimbMix's training shards 0 and 1, pinned by the dataset's revision and checked against their
+#   SHA-256, and the tokenizer, in /opt/nanochat: outside /work, root's, and readable by every uid.
+#   Never the last shard, 06542, whose documents are the held-out splits in eval/secret.
+set -eu
+pip install --no-cache-dir --root-user-action=ignore --require-hashes --no-deps \
+  --index-url https://download.pytorch.org/whl/cpu -r bench/torch.lock
+pip install --no-cache-dir --root-user-action=ignore --require-hashes --no-deps \
+  --index-url https://pypi.org/simple -r bench/requirements.lock
+
+base=/opt/nanochat
+data=$base/base_data_climbmix
+revision=915333b4f8b8684f39aeaafea600fea6f43fb703
+mkdir -p "$data" "$base/tokenizer"
+shard() {
+  curl -fsSL --retry 3 -o "$data/$1.part" \
+    "https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle/resolve/$revision/$1"
+  echo "$2  $data/$1.part" | sha256sum -c -
+  mv "$data/$1.part" "$data/$1"
+}
+shard shard_00000.parquet 054ddbd98abf30d773c54de578fc9d579bafeb6c14e04e97bd36aa90e825bf9b
+shard shard_00001.parquet d4cfe1de19f4fd976022a9047458655968bc5583582ec5fa714801ec2be2c93c
+cp bench/tokenizer/ranks.tiktoken bench/tokenizer/tokenizer.json "$base/tokenizer/"
+chmod 0755 "$base" "$data" "$base/tokenizer"
+chmod 0644 "$data"/* "$base/tokenizer"/*

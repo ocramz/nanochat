@@ -10,9 +10,7 @@ For details of how the dataset was prepared, see `repackage_data_reference.py`.
 import os
 import argparse
 import time
-import requests
 import pyarrow.parquet as pq
-from multiprocessing import Pool
 
 from nanochat.common import get_base_dir
 
@@ -92,6 +90,7 @@ def download_single_file(index):
         return True
 
     # Construct the remote URL for this file
+    import requests  # speedrun harness: imported only to download, which no run does
     url = f"{BASE_URL}/{filename}"
     print(f"Downloading {filename}...")
 
@@ -134,6 +133,7 @@ def download_single_file(index):
 
 
 if __name__ == "__main__":
+    from multiprocessing import Pool
     parser = argparse.ArgumentParser(description="Download pretraining dataset shards")
     parser.add_argument("-n", "--num-files", type=int, default=-1, help="Number of train shards to download (default: -1), -1 = disable")
     parser.add_argument("-w", "--num-workers", type=int, default=4, help="Number of parallel download workers (default: 4)")

@@ -1,0 +1,26 @@
+# What agents never see, and runs never need (plan 16a of pi-autoresearch-serverless): nanochat's
+# other stages and tools, its tests and notes, and the harness's workstation-only scripts. `git
+# archive` leaves them out of the project's tree.
+.claude export-ignore
+dev export-ignore
+runs export-ignore
+tasks export-ignore
+tests export-ignore
+scripts/base_eval.py export-ignore
+scripts/base_train.py export-ignore
+scripts/chat_cli.py export-ignore
+scripts/chat_eval.py export-ignore
+scripts/chat_rl.py export-ignore
+scripts/chat_sft.py export-ignore
+scripts/infer_bench.py export-ignore
+scripts/tok_eval.py export-ignore
+scripts/tok_train.py export-ignore
+nanochat/checkpoint_manager.py export-ignore
+nanochat/core_eval.py export-ignore
+nanochat/engine.py export-ignore
+nanochat/execution.py export-ignore
+nanochat/fp8.py export-ignore
+nanochat/loss_eval.py export-ignore
+bench/lock-pyproject.toml export-ignore
+eval/make_val.py export-ignore
+eval/selftest.py export-ignore

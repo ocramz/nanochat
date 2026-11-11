@@ -1,7 +1,13 @@
 """
 BPE Tokenizer in the style of GPT-4: train with rustbpe, inference with tiktoken.
+
+Speedrun harness: the tokenizer is kept as plain text, never pickled: ranks.tiktoken (each token in
+base64 and its rank, tiktoken's own format) and tokenizer.json (the split pattern and the special
+tokens), so that the locked scorer reads it as data. rustbpe is needed only to train one.
 """
 
+import base64
+import json
 import os
 import copy
 from functools import lru_cache
@@ -27,8 +33,6 @@ SPLIT_PATTERN = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,2}| 
 
 # -----------------------------------------------------------------------------
 # Tokenizer based on rustbpe + tiktoken combo
-import pickle
-import rustbpe
 import tiktoken
 
 class RustBPETokenizer:
@@ -41,6 +45,7 @@ class RustBPETokenizer:
     @classmethod
     def train_from_iterator(cls, text_iterator, vocab_size):
         # 1) train using rustbpe
+        import rustbpe
         tokenizer = rustbpe.Tokenizer()
         # the special tokens are inserted later in __init__, we don't train them here
         vocab_size_no_special = vocab_size - len(SPECIAL_TOKENS)
@@ -62,10 +67,20 @@ class RustBPETokenizer:
 
     @classmethod
     def from_directory(cls, tokenizer_dir):
-        pickle_path = os.path.join(tokenizer_dir, "tokenizer.pkl")
-        with open(pickle_path, "rb") as f:
-            enc = pickle.load(f)
-        return cls(enc, "<|bos|>")
+        with open(os.path.join(tokenizer_dir, "tokenizer.json")) as f:
+            meta = json.load(f)
+        ranks = {}
+        with open(os.path.join(tokenizer_dir, "ranks.tiktoken"), "rb") as f:
+            for line in f:
+                token, rank = line.split()
+                ranks[base64.b64decode(token)] = int(rank)
+        enc = tiktoken.Encoding(
+            name="rustbpe",
+            pat_str=meta["pat_str"],
+            mergeable_ranks=ranks,
+            special_tokens=meta["special_tokens"],
+        )
+        return cls(enc, meta["bos"])
 
     @classmethod
     def from_pretrained(cls, tiktoken_name):
@@ -130,12 +145,21 @@ class RustBPETokenizer:
         return self.enc.decode_single_token_bytes(token_id)
 
     def save(self, tokenizer_dir):
-        # save the encoding object to disk
+        # save the encoding to disk as plain text: the ranks in tiktoken's format, the rest as JSON
         os.makedirs(tokenizer_dir, exist_ok=True)
-        pickle_path = os.path.join(tokenizer_dir, "tokenizer.pkl")
-        with open(pickle_path, "wb") as f:
-            pickle.dump(self.enc, f)
-        print(f"Saved tokenizer encoding to {pickle_path}")
+        ranks = sorted(self.enc._mergeable_ranks.items(), key=lambda kv: kv[1])
+        with open(os.path.join(tokenizer_dir, "ranks.tiktoken"), "wb") as f:
+            for token, rank in ranks:
+                f.write(base64.b64encode(token) + b" " + str(rank).encode() + b"\n")
+        meta = {
+            "pat_str": self.enc._pat_str,
+            "special_tokens": self.enc._special_tokens,
+            "bos": self.enc.decode([self.bos_token_id]),
+        }
+        with open(os.path.join(tokenizer_dir, "tokenizer.json"), "w") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        print(f"Saved tokenizer encoding to {tokenizer_dir}")
 
     def render_conversation(self, conversation, max_tokens=2048):
         """
@@ -268,12 +292,12 @@ def get_tokenizer():
     return RustBPETokenizer.from_directory(tokenizer_dir)
 
 def get_token_bytes(device="cpu"):
+    # each token's length in raw bytes, 0 for the special tokens, which bits per byte doesn't count
     import torch
-    from nanochat.common import get_base_dir
-    base_dir = get_base_dir()
-    tokenizer_dir = os.path.join(base_dir, "tokenizer")
-    token_bytes_path = os.path.join(tokenizer_dir, "token_bytes.pt")
-    assert os.path.exists(token_bytes_path), f"Token bytes not found at {token_bytes_path}? It gets written by tok_train.py"
-    with open(token_bytes_path, "rb") as f:
-        token_bytes = torch.load(f, map_location=device)
-    return token_bytes
+    tokenizer = get_tokenizer()
+    special_ids = {tokenizer.encode_special(s) for s in tokenizer.get_special_tokens()}
+    token_bytes = [
+        0 if i in special_ids else len(tokenizer.decode_single_token_bytes(i))
+        for i in range(tokenizer.get_vocab_size())
+    ]
+    return torch.tensor(token_bytes, dtype=torch.int32, device=device)

@@ -1,0 +1,15 @@
+{
+  "pat_str": "'(?i:[sdmt]|ll|ve|re)|[^\\r\\n\\p{L}\\p{N}]?+\\p{L}+|\\p{N}{1,2}| ?[^\\s\\p{L}\\p{N}]++[\\r\\n]*|\\s*[\\r\\n]|\\s+(?!\\S)|\\s+",
+  "special_tokens": {
+    "<|bos|>": 8183,
+    "<|user_start|>": 8184,
+    "<|user_end|>": 8185,
+    "<|assistant_start|>": 8186,
+    "<|assistant_end|>": 8187,
+    "<|python_start|>": 8188,
+    "<|python_end|>": 8189,
+    "<|output_start|>": 8190,
+    "<|output_end|>": 8191
+  },
+  "bos": "<|bos|>"
+}
