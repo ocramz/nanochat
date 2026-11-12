@@ -49,15 +49,21 @@ only where it ended.
 - **Where and how:** `$CHECKPOINTS/<ms>.onnx`, `<ms>` the milliseconds since the process started, a
   whole number with no leading zero, before the round's end.
 - **The final model's graph:** a snapshot counts only if it is `model.onnx` but for its weights'
-  values, no larger, and keeps the contract; at most 16 count, the earliest. The root's
-  `nanochat/export.py` makes one in a fraction of a second, by writing the current weights into the
-  untrained model's export, which runs no graph optimizer for that reason.
+  values and its metadata, no larger, and keeps the contract; at most 16 count, the earliest. The
+  root's `nanochat/export.py` makes one in a fraction of a second, by writing the current weights
+  into the untrained model's export, which runs no graph optimizer for that reason.
+- **Tokens trained:** each snapshot, and `model.onnx`, may give the tokens it trained on as the ONNX
+  metadata entry `tokens`, a whole number in decimal. The root's records `step × TOTAL_BATCH`. A
+  model that gives none, or no more than the snapshot before it, is left out of the curve by tokens
+  only.
 - **What you see:** the harness scores the first measured round's snapshots, and its final model, on
   diagnostic text: held-out text from another shard than the training data and the metric's, which
-  no round can read and nothing selects on. The query tools show each experiment's curve of bits per
-  byte against time, and the final model's bits per byte by the position of the target in its row
-  (0–63, 64–255, 256–511), baseline against candidate. They are not the metric, and don't count
-  toward a node's value.
+  no round can read and nothing selects on. The query tools show each experiment's curves of bits per
+  byte, `bpb_time` against the seconds since the round's start and `bpb_tokens` against the tokens
+  trained, and the final model's bits per byte by the position of the target in its row (0–63,
+  64–255, 256–511), baseline against candidate. By time is what the budget buys; by tokens separates
+  learning per token from throughput, so that a faster candidate's curve reaches further right. They
+  are not the metric, and don't count toward a node's value.
 - **Their cost:** writing them takes the round's own time, within its budget, the same for every
   round of either side.
 

@@ -146,21 +146,24 @@ def quiet(fn, *args):
 
 
 def snapshot_cases(root, data):
-    """Snapshots, as the round writes them and the harness takes them (plan 16e)."""
+    """Snapshots, as the round writes them and the harness takes them (plans 16e, 16f)."""
     shape = template(data)
     trained = model()  # other weights, the same graph
     trained.load_state_dict(root.state_dict())
     with torch.no_grad():
         for p in trained.parameters():
             p.add_(0.01 * torch.randn_like(p))
-    final = to_onnx(trained)
+    final_tokens = 4096 * 20
+    final = to_onnx(trained, final_tokens)
 
     def same_bytes():
-        if snapshot(shape, trained) != final:
-            raise check.Failed("a snapshot differs from the export of the same weights")
+        if snapshot(shape, trained, final_tokens) != final:
+            raise check.Failed("a snapshot differs from the export of the same weights and tokens")
+        if evallib.examine(final) != (evallib.examine(to_onnx(trained))[0], final_tokens):
+            raise check.Failed("the skeleton keeps the tokens, or they don't read back")
         return f"{len(final):,} bytes"
 
-    expect("a snapshot is the export of the same weights, byte for byte", False, same_bytes)
+    expect("a snapshot is the export of the same weights and tokens, byte for byte; the skeleton leaves them out", False, same_bytes)
 
     with tempfile.TemporaryDirectory() as d:
         checkpoints, outputs = os.path.join(d, "checkpoints"), os.path.join(d, "outputs")
@@ -169,7 +172,9 @@ def snapshot_cases(root, data):
         with open(os.path.join(outputs, "model.onnx"), "wb") as f:
             f.write(final)
         wall_ms = 300_000
-        files = {f"{1000 * (k + 1)}.onnx": snapshot(shape, root) for k in range(18)}
+        # Tokens trained by snapshot: none in the third, and the sixth no more than the fifth.
+        tokens = [None if k == 2 else 4096 * (k - 1 if k == 5 else k) for k in range(18)]
+        files = {f"{1000 * (k + 1)}.onnx": snapshot(shape, root, tokens[k]) for k in range(18)}
         files["0300000.onnx"] = data  # not a name: a leading zero
         files["300000.onnx"] = data  # not before the round's end
         files["snapshot.onnx"] = data
@@ -180,29 +185,36 @@ def snapshot_cases(root, data):
 
         def counted():
             said = []
-            kept = [ms for ms, _ in evallib.snapshots(checkpoints, wall_ms, final, said.append)]
+            kept = [(ms, n) for ms, n, _ in evallib.snapshots(checkpoints, wall_ms, final, said.append)]
             # The first 16 by time are 500.onnx, of another graph, and 1000 to 15000.
-            if kept != [1000 * (k + 1) for k in range(15)]:
+            if kept != [(1000 * (k + 1), tokens[k]) for k in range(15)]:
                 raise check.Failed(f"kept {kept}; skipped {said}")
             return f"{len(kept)} kept, {len(said)} skipped"
 
-        expect("only the snapshots that count: <ms>.onnx, before the end, the final graph, 16 at most", False, counted)
+        expect("only the snapshots that count: <ms>.onnx, before the end, the final graph, 16 at most, with their tokens", False, counted)
 
         def schema():
             out, code = quiet(diagnose.main, [checkpoints, outputs, str(wall_ms), os.path.dirname(HERE)])
             printed = json.loads(out)
-            curve = printed["curves"]["bpb"]
-            xs = [x for x, _ in curve]
-            names = sorted(printed["values"])
-            if code != 0 or sorted(printed) != ["curves", "values"] or list(printed["curves"]) != ["bpb"]:
+            if code != 0 or sorted(printed) != ["curves", "values"] or sorted(printed["curves"]) != ["bpb_time", "bpb_tokens"]:
                 raise check.Failed(f"exit {code}: {out[:200]}")
-            if names != ["bpb_pos_0_63", "bpb_pos_256_511", "bpb_pos_64_255"] or xs != sorted(set(xs)) or xs[-1] != wall_ms or len(xs) != 16:
-                raise check.Failed(f"{names}, x {xs}")
-            if not all(math.isfinite(y) for _, y in curve) or not all(math.isfinite(v) for v in printed["values"].values()):
+            by_time, by_tokens = printed["curves"]["bpb_time"], printed["curves"]["bpb_tokens"]
+            names = sorted(printed["values"])
+            if names != ["bpb_pos_0_63", "bpb_pos_256_511", "bpb_pos_64_255"]:
+                raise check.Failed(f"values {names}")
+            # By time: every snapshot that counts, in seconds, then the final model at the round's end.
+            if [x for x, _ in by_time] != [k + 1 for k in range(15)] + [wall_ms / 1000]:
+                raise check.Failed(f"bpb_time's x {[x for x, _ in by_time]}")
+            # By tokens: the same models' points, but those without tokens or with no more than the point before.
+            on = [k for k in range(15) if k not in (2, 5)]
+            want = [[tokens[k], by_time[k][1]] for k in on] + [[final_tokens, by_time[-1][1]]]
+            if by_tokens != want:
+                raise check.Failed(f"bpb_tokens {by_tokens}, not {want}")
+            if not all(math.isfinite(y) for _, y in by_time) or not all(math.isfinite(v) for v in printed["values"].values()):
                 raise check.Failed("a number that isn't finite")
-            return f"{len(out):,} bytes, the final model at {curve[-1][1]:.4f}"
+            return f"{len(out):,} bytes, the final model at {by_time[-1][1]:.4f}"
 
-        expect("diagnose prints its schema: the curve bpb, the final model last, the three values", False, schema)
+        expect("diagnose prints its schema: the curves by time and by tokens, the final model last, the three values", False, schema)
 
         def unchanged():
             secret = os.path.dirname(HERE)

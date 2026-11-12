@@ -9,8 +9,9 @@ $SECRET, which the payload never sees. The test split is for scoring by hand: no
 
 With --checkpoints, the round's snapshots that count (evallib.snapshots) and the final model, at
 --wall-ms, are scored on the first CURVE_TOKENS val tokens after the number is printed: the val curve,
-on stderr, which goes to the owner's score.log alone (plan 16e). Its snapshots take at most
-CURVE_SECS, and nothing in it changes what is printed, or the exit status.
+on stderr, which goes to the owner's score.log alone (plan 16e), each point with its time and the
+tokens its model says it trained on (plan 16f). Its snapshots take at most CURVE_SECS, and nothing in
+it changes what is printed, or the exit status.
 """
 
 import os
@@ -50,17 +51,18 @@ def val_curve(checkpoints, wall_ms, final, sess, tokens, nbytes):
     deadline = time.monotonic() + CURVE_SECS
     rows = evallib.chunks(tokens[: evallib.CURVE_TOKENS], evallib.rules.T_EVAL)
     shown = 0
-    for ms, data in evallib.snapshots(checkpoints, wall_ms, final, say):
+    for ms, trained, data in evallib.snapshots(checkpoints, wall_ms, final, say):
         if time.monotonic() > deadline:
             say(f"the val curve's snapshots stop after {CURVE_SECS} s")
             break
         try:
-            say(f"val curve: {ms} ms: {evallib.bits_per_byte(evallib.session(data), rows, nbytes):.6f}")
+            say(f"val curve: {ms} ms, {trained} tokens: {evallib.bits_per_byte(evallib.session(data), rows, nbytes):.6f}")
             shown += 1
         except evallib.Refused as e:
             say(f"{ms}.onnx: {e}")
     if shown > 0:
-        say(f"val curve: {wall_ms} ms: {evallib.bits_per_byte(sess, rows, nbytes):.6f} (the final model)")
+        trained = evallib.examine(final)[1]
+        say(f"val curve: {wall_ms} ms, {trained} tokens: {evallib.bits_per_byte(sess, rows, nbytes):.6f} (the final model)")
 
 
 def main(argv):

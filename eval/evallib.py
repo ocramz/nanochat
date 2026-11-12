@@ -1,6 +1,7 @@
 """
 What eval/check.py, eval/score.py and eval/diagnose.py share: the tokenizer, the held-out text as one
-stream of tokens, onnxruntime sessions, bits per byte, and a round's snapshots.
+stream of tokens, onnxruntime sessions, bits per byte, and a round's snapshots, with the tokens each
+model says it trained on.
 
 Locked, and run as the scorer under `python -I`: it imports numpy, onnx, onnxruntime and tiktoken
 from the image, and the contract (nanochat/onnx_rules.py) by its path in the locked tree, never the
@@ -44,6 +45,9 @@ CURVE_TOKENS = 2**15
 MAX_SNAPSHOTS = 16
 SNAPSHOT_SLACK = 1.1
 SNAPSHOT_NAME = re.compile(r"^(0|[1-9][0-9]{0,11})\.onnx$")
+# The metadata entry a model gives the tokens it trained on in, a whole number (plan 16f).
+TOKENS = "tokens"
+TOKENS_VALUE = re.compile(r"^(0|[1-9][0-9]{0,14})$")
 
 
 def _load_rules():
@@ -195,22 +199,27 @@ def nats_by_position(sess, rows, nbytes):
     return nats, total
 
 
-def skeleton(data):
-    """A model with its initializers' values dropped: what a snapshot must share with the final
-    model, so that scoring it costs what scoring the gated model does."""
+def examine(data):
+    """A model's skeleton, the model with its initializers' values and its metadata dropped, which a
+    snapshot must share with the final model, so that scoring it costs what scoring the gated model
+    does; and the tokens it says it trained on, its one metadata entry `tokens`, or None without a
+    whole number there."""
     model = onnx.load_model_from_string(data)
+    given = [prop.value for prop in model.metadata_props if prop.key == TOKENS]
+    tokens = int(given[0]) if len(given) == 1 and TOKENS_VALUE.match(given[0]) else None
+    del model.metadata_props[:]
     for tensor in model.graph.initializer:
         for field in ("raw_data", "float_data", "int32_data", "int64_data", "double_data", "uint64_data", "string_data"):
             tensor.ClearField(field)
-    return model.SerializeToString()
+    return model.SerializeToString(), tokens
 
 
 def snapshots(directory, wall_ms, final, say):
-    """The snapshots of a round that count (plan 16e), in time order, one at a time, as (ms, bytes):
-    named `<ms>.onnx`, ms under the round's `wall_ms`, the first MAX_SNAPSHOTS by time, each a
-    regular file at most SNAPSHOT_SLACK times the final model's bytes, keeping the contract, with the
-    final model's graph but for its weights. `say` is told why each other one is skipped. A
-    directory that isn't there holds none."""
+    """The snapshots of a round that count (plan 16e), in time order, one at a time, as (ms, tokens,
+    bytes), tokens as `examine` reads them: named `<ms>.onnx`, ms under the round's `wall_ms`, the
+    first MAX_SNAPSHOTS by time, each a regular file at most SNAPSHOT_SLACK times the final model's
+    bytes, keeping the contract, with the final model's graph but for its weights and metadata. `say`
+    is told why each other one is skipped. A directory that isn't there holds none."""
     if directory is None or not os.path.isdir(directory):
         return
     named = []
@@ -241,8 +250,9 @@ def snapshots(directory, wall_ms, final, say):
         if found:
             say(f"{name}: breaks the contract: {found[0]}")
             continue
-        want = skeleton(final) if want is None else want
-        if skeleton(data) != want:
+        want = examine(final)[0] if want is None else want
+        shape, tokens = examine(data)
+        if shape != want:
             say(f"{name}: not the final model's graph")
             continue
-        yield ms, data
+        yield ms, tokens, data

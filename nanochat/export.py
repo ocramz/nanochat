@@ -6,8 +6,11 @@ agents read; the gate's own reasons never reach them.
 
 A snapshot (plan 16e of pi-autoresearch-serverless) is an export's graph with the model's current
 weights written into it, by name: no new export, so it takes a fraction of a second. The harness
-scores a snapshot only if its graph is the final model's, but for its weights' values; the export
-runs no graph optimizer, which would fold weights into constants of other names.
+scores a snapshot only if its graph is the final model's, but for its weights' values and its
+metadata; the export runs no graph optimizer, which would fold weights into constants of other names.
+
+Each snapshot, and the final model, records how many tokens it trained on, as the metadata entry
+`tokens` (plan 16f): the harness's learning curves have one by time and one by tokens trained.
 
 Editable: change how the model exports, as long as what it writes keeps the contract.
 """
@@ -30,16 +33,31 @@ from nanochat.onnx_rules import T_EVAL, VOCAB, problems  # noqa: E402
 for _name in ("onnxscript", "onnx_ir", "torch.onnx"):
     logging.getLogger(_name).setLevel(logging.WARNING)
 
+# The metadata entry the harness reads a model's tokens trained from (SPEEDRUN.md).
+TOKENS = "tokens"
+
 
 class ExportFailed(Exception):
     pass
 
 
-def to_onnx(model):
-    """The model's bytes as ONNX: one int64 input [1, T_EVAL], one float output [1, T_EVAL, VOCAB].
-    Export the plain module, never a torch.compile'd one. With no graph optimizer (onnxruntime folds
-    constants itself as it loads a model), every weight is an initializer named after its parameter,
-    which a snapshot fills in."""
+def record_tokens(proto, tokens):
+    """Writes `tokens`, the tokens the model trained on, into the model's metadata, as the harness
+    reads them; nothing when it is None."""
+    if tokens is None:
+        return
+    for prop in proto.metadata_props:
+        if prop.key == TOKENS:
+            prop.value = str(tokens)
+            return
+    proto.metadata_props.add(key=TOKENS, value=str(tokens))
+
+
+def to_onnx(model, tokens=None):
+    """The model's bytes as ONNX: one int64 input [1, T_EVAL], one float output [1, T_EVAL, VOCAB],
+    and the tokens it trained on in its metadata, when given. Export the plain module, never a
+    torch.compile'd one. With no graph optimizer (onnxruntime folds constants itself as it loads a
+    model), every weight is an initializer named after its parameter, which a snapshot fills in."""
     was_training = model.training
     model.eval()
     idx = torch.zeros((1, T_EVAL), dtype=torch.long)
@@ -49,7 +67,9 @@ def to_onnx(model):
                 model, (idx,), dynamo=True, opset_version=18,
                 input_names=["idx"], output_names=["logits"], verbose=False, optimize=False,
             )
-        return program.model_proto.SerializeToString()
+        proto = program.model_proto
+        record_tokens(proto, tokens)
+        return proto.SerializeToString()
     except Exception as e:
         raise ExportFailed(f"torch.onnx.export failed: {type(e).__name__}: {e}") from e
     finally:
@@ -86,9 +106,10 @@ def template(data):
     return onnx.load_model_from_string(data)
 
 
-def snapshot(template, model):
+def snapshot(template, model, tokens=None):
     """The template's graph with the model's current weights, written into the initializers named after
-    its parameters and buffers: the export of the same weights, byte for byte."""
+    its parameters and buffers, and the tokens it trained on: the export of the same weights and
+    tokens, byte for byte."""
     current = {**dict(model.named_parameters()), **dict(model.named_buffers())}
     proto = onnx.ModelProto()
     proto.CopyFrom(template)
@@ -98,12 +119,14 @@ def snapshot(template, model):
             dtype = onnx.helper.tensor_dtype_to_np_dtype(init.data_type)
             array = tensor.detach().to("cpu").float().numpy() if tensor.is_floating_point() else tensor.detach().to("cpu").numpy()
             init.CopyFrom(numpy_helper.from_array(array.astype(dtype, copy=False), init.name))
+    record_tokens(proto, tokens)
     return proto.SerializeToString()
 
 
-def export(model, path):
-    """Writes the model to `path` as ONNX, checked; returns its size in bytes."""
-    data = to_onnx(model)
+def export(model, path, tokens=None):
+    """Writes the model to `path` as ONNX, checked, with the tokens it trained on; returns its size in
+    bytes."""
+    data = to_onnx(model, tokens)
     verify(model, data)
     with open(path, "wb") as f:
         f.write(data)

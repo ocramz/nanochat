@@ -10,7 +10,9 @@
 # Learning curves (plan 16e): each round writes a snapshot of its model at each tenth of its training
 # time to $CHECKPOINTS; eval/diagnose scores the first measured round's on the diagnostic text, in
 # $DIAGNOSTIC, which nothing selects on, for agents to see; eval/score logs their val curve for the
-# owner alone.
+# owner alone. Each curve is drawn twice (plan 16f): by time, the budget's unit, and by tokens
+# trained, which each model records in its ONNX metadata, and which a change of batch size leaves
+# comparable.
 
 [agents]
 max_tokens = 3000000
@@ -54,8 +56,9 @@ score = { cmd = "env ORT_DISABLE_TELEMETRY=1 python -I eval/score.py $OUTPUTS $S
 diagnose = { cmd = "env ORT_DISABLE_TELEMETRY=1 python -I eval/diagnose.py $CHECKPOINTS $OUTPUTS $WALL_MS $DIAGNOSTIC", timeout_secs = 180 }
 
 [diagnose]
-curves = ["bpb"]
+curves = ["bpb_time", "bpb_tokens"]
 values = ["bpb_pos_0_63", "bpb_pos_64_255", "bpb_pos_256_511"]
+axes = { bpb_time = { x = "seconds since the round's start", y = "bits per byte" }, bpb_tokens = { x = "tokens trained", y = "bits per byte" } }
 
 [paired]
 # The metric is no time: nothing to warm up. Each round trains from a seed of its own.

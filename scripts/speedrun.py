@@ -6,8 +6,8 @@ The speedrun's training script (SPEEDRUN.md): trains nanochat's GPT from scratch
 Trimmed from scripts/base_train.py: one process on the CPU, no evaluation, no checkpoints, no
 logging service; the schedules follow the time spent rather than a number of steps, as
 karpathy/autoresearch's do. With --checkpoints, it writes a snapshot of the model at each tenth of
-its training time, which the harness scores for the learning curves (SPEEDRUN.md). Run from the
-repository's root:
+its training time, which the harness scores for the learning curves (SPEEDRUN.md); each snapshot, and
+the model, records the tokens it trained on. Run from the repository's root:
 
     NANOCHAT_BASE_DIR=/opt/nanochat python -m scripts.speedrun --wall-secs 120 --out OUT [--checkpoints DIR]
 
@@ -163,10 +163,10 @@ def main():
             snapped += 1
             t0 = time.time()
             ms = int((t0 - START) * 1000)
-            data = snapshot(shape, model)
+            data = snapshot(shape, model, step * TOTAL_BATCH)
             with open(os.path.join(args.checkpoints, f"{ms}.onnx"), "wb") as f:
                 f.write(data)
-            say(f"snapshot {snapped} at {ms} ms, {len(data):,} bytes, in {time.time() - t0:.2f} s")
+            say(f"snapshot {snapped} at {ms} ms, {step * TOTAL_BATCH:,} tokens, {len(data):,} bytes, in {time.time() - t0:.2f} s")
         lrm = lr_multiplier(progress)
         for group in optimizer.param_groups:
             group["lr"] = group["initial_lr"] * lrm
@@ -191,7 +191,7 @@ def main():
 
     elapsed = time.time() - train_start
     say(f"trained {step} steps, {step * TOTAL_BATCH:,} tokens in {elapsed:.1f} s, loss {smooth_loss / (1 - 0.9**max(step, 1)):.4f}")
-    size = export(model, os.path.join(args.out, "model.onnx"))
+    size = export(model, os.path.join(args.out, "model.onnx"), step * TOTAL_BATCH)
     say(f"exported {size:,} bytes")
 
 
